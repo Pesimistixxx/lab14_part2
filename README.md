@@ -38,11 +38,75 @@ flowchart LR
     P3 -->|"результат"| Main
 ```
 
-Ключевые особенности:
-- Каждый процесс изолирован — у него своя память, свои переменные.
-- Обмен данными между процессами осуществляется через `Queue`, `Pipe` или возвращаемое значение `Pool.map()`.
-- Создание процесса — дорогая операция, поэтому имеет смысл создавать их не больше, чем ядер CPU.
-- Обязательно использовать `if __name__ == '__main__':` в главном модуле.
+**Пример создания процесса** (файл `01_basic_process.py`):
+
+```python
+from multiprocessing import Process, current_process
+import os, time
+
+def worker(task_name, duration):
+    """Функция, выполняемая в отдельном процессе."""
+    print(f"[{current_process().name}] Начало задачи '{task_name}' "
+          f"(PID={os.getpid()}, родитель={os.getppid()})")
+    time.sleep(duration)
+    print(f"[{current_process().name}] Задача '{task_name}' завершена")
+
+if __name__ == '__main__':
+    print(f"Главный процесс: PID={os.getpid()}")
+    tasks = [("Загрузка", 2), ("Обработка", 3), ("Сохранение", 1)]
+
+    processes = []
+    for name, dur in tasks:
+        p = Process(target=worker, args=(name, dur))  # создаём процесс
+        processes.append(p)
+
+    for p in processes:
+        p.start()   # запускаем все процессы
+
+    for p in processes:
+        p.join()     # ждём завершения всех
+```
+
+- `Process(target=..., args=...)` — создаёт новый процесс. Функция `worker` будет выполнена в отдельном процессе ОС.
+- `p.start()` — запускает процесс (ОС создаёт новый PID).
+- `p.join()` — главный процесс ожидает завершения дочернего.
+- `os.getpid()` — PID текущего процесса, `os.getppid()` — PID родительского.
+- Три задачи с `time.sleep(2, 3, 1)` последовательно заняли бы 6 сек, но параллельно — ~3 сек (время самой длинной).
+
+**Передача данных между процессами** (файл `02_matrix_multiply.py`):
+
+Каждый процесс работает с копией данных. Обычные переменные **не передают** результат обратно в главный процесс. Для этого используется `Queue`:
+
+```python
+from multiprocessing import Process, Queue
+
+def element_to_queue(index, A, B, q):
+    i, j = index
+    res = sum(A[i][k] * B[k][j] for k in range(len(A[0])))
+    q.put((index, res))  # отправляем результат в очередь
+
+q = Queue()
+p = Process(target=element_to_queue, args=((0, 0), A, B, q))
+p.start()
+p.join()
+(i, j), value = q.get()  # получаем результат из очереди
+```
+
+**Пул процессов** (файл `03_pool_matrix.py`):
+
+Создавать отдельный процесс на каждую маленькую задачу неэффективно. `Pool` создаёт фиксированное число процессов и распределяет задачи между ними:
+
+```python
+from multiprocessing import Pool
+
+def element(i, j, A, B):
+    res = sum(A[i][k] * B[k][j] for k in range(len(A[0])))
+    return (i, j, res)
+
+args = [(i, j, A, B) for i in range(rows) for j in range(cols)]
+with Pool(processes=4) as pool:
+    results = pool.starmap(element, args)  # 4 процесса делят все задачи
+```
 
 ### Асинхронное программирование (asyncio)
 
@@ -63,11 +127,77 @@ sequenceDiagram
     C2->>EL: завершение
 ```
 
-Ключевые особенности:
-- Корутины (`async def`) — легковесные, можно создавать тысячи.
-- Переключение происходит **только** в точках `await` — кооперативная многозадачность.
-- Нельзя использовать стандартные блокирующие операции (`socket.recv()`, `time.sleep()`), нужны асинхронные аналоги (`await reader.read()`, `await asyncio.sleep()`).
-- `asyncio.gather()` позволяет запустить несколько корутин «одновременно».
+**Пример: синхронный vs асинхронный подход** (файл `01_sync_vs_async.py`):
+
+Синхронно — три запроса выполняются последовательно (2 + 3 + 1 = 6 сек):
+
+```python
+import time
+
+def fetch_data_sync(source, delay):
+    print(f"  Запрос к '{source}'...")
+    time.sleep(delay)        # блокирует весь поток на delay секунд
+    return f"данные из {source}"
+
+results = []
+results.append(fetch_data_sync("API сервер", 2))
+results.append(fetch_data_sync("База данных", 3))
+results.append(fetch_data_sync("Файловое хранилище", 1))
+# Общее время: ~6 сек
+```
+
+Асинхронно — три запроса выполняются «одновременно» (max(2, 3, 1) = 3 сек):
+
+```python
+import asyncio
+
+async def fetch_data_async(source, delay):
+    print(f"  Запрос к '{source}'...")
+    await asyncio.sleep(delay)  # отпускает управление event loop-у
+    return f"данные из {source}"
+
+async def main_async():
+    results = await asyncio.gather(
+        fetch_data_async("API сервер", 2),
+        fetch_data_async("База данных", 3),
+        fetch_data_async("Файловое хранилище", 1),
+    )
+    return results
+
+asyncio.run(main_async())
+# Общее время: ~3 сек
+```
+
+- `async def` — определяет корутину (асинхронную функцию).
+- `await asyncio.sleep(delay)` — приостанавливает текущую корутину и передаёт управление event loop, который может выполнить другие корутины. В отличие от `time.sleep()`, не блокирует весь поток.
+- `asyncio.gather(...)` — запускает несколько корутин параллельно и ждёт завершения всех.
+- `asyncio.run(main())` — создаёт event loop и запускает корутину (Python 3.7+).
+
+**Асинхронный TCP-сервер** (файл `02_echo_server.py`):
+
+```python
+import asyncio
+
+async def handle_echo(reader, writer):
+    data = await reader.read(1024)       # неблокирующее чтение
+    addr = writer.get_extra_info('peername')
+    print(f"Подключение от {addr}: '{data.decode()}'")
+    writer.write(data)                    # отправка обратно
+    await writer.drain()                  # ожидание отправки
+    writer.close()
+    await writer.wait_closed()
+
+async def main():
+    server = await asyncio.start_server(handle_echo, '127.0.0.1', 9095)
+    async with server:
+        await server.serve_forever()
+
+asyncio.run(main())
+```
+
+- `asyncio.start_server(callback, host, port)` — создаёт TCP-сервер. При каждом подключении вызывается корутина `handle_echo`.
+- `reader` / `writer` — асинхронные потоки для чтения и записи данных.
+- Сервер обслуживает много клиентов в одном потоке — переключение происходит в точках `await`.
 
 ### Сравнительная таблица
 
@@ -85,18 +215,24 @@ sequenceDiagram
 
 ## Подготовка
 
-### 1. Клонирование репозитория
+### 1. Форк репозитория (на GitHub)
+
+1. Откройте репозиторий преподавателя: [github.com/Mohanad0101/lab14_part2](https://github.com/Mohanad0101/lab14_part2)
+2. Нажмите кнопку **"Fork"** в правом верхнем углу.
+3. GitHub создаст копию репозитория в вашем аккаунте: `https://github.com/<ВАШ_ЛОГИН>/lab14_part2`
+
+### 2. Клонирование вашего форка
 
 ```bash
 cd ~
 rm -rf lab14_part2
-git clone https://github.com/Mohanad0101/lab14_part2.git lab14_part2
+git clone https://github.com/<ВАШ_ЛОГИН>/lab14_part2.git lab14_part2
 cd lab14_part2
 ```
 
-> Команда `rm -rf lab14_part2` удаляет старую папку, если она существует. Если вы уже работали в ней — убедитесь, что сохранили свои изменения перед удалением.
+> Замените `<ВАШ_ЛОГИН>` на ваш логин GitHub. Команда `rm -rf lab14_part2` удаляет старую папку, если она существует.
 
-### 2. Проверка версии Python
+### 3. Проверка версии Python
 
 ```bash
 python3 --version
@@ -104,7 +240,7 @@ python3 --version
 
 Требуется Python 3.8 или выше.
 
-### 3. Структура репозитория
+### 4. Структура репозитория
 
 ```
 lab14_part2/
@@ -122,7 +258,28 @@ lab14_part2/
     └── 03_echo_client.py              # Эхо-клиент — TODO
 ```
 
-### 4. Как работать с файлами
+### 5. Редактирование кода (Sublime Text)
+
+Для редактирования файлов используйте **Sublime Text**. Откройте файл командой `subl`:
+
+```bash
+subl multiprocessing_examples/02_matrix_multiply.py
+```
+
+Или откройте весь проект сразу:
+
+```bash
+subl ~/lab14_part2
+```
+
+> Если команда `subl` не найдена, используйте `nano` или `vim`:
+> ```bash
+> nano multiprocessing_examples/02_matrix_multiply.py
+> ```
+
+**Совет:** в Sublime Text нажмите `Ctrl+G`, чтобы перейти к нужной строке, или `Ctrl+F` и введите `TODO`, чтобы найти все места для заполнения.
+
+### 6. Как работать с файлами
 
 В файлах с заданиями вы найдёте:
 
@@ -136,6 +293,24 @@ lab14_part2/
 ```
 
 Вам нужно дописать код в этих местах. Не удаляйте комментарии — они помогут преподавателю проверить работу.
+
+### 7. Рабочий цикл: редактирование → запуск → проверка
+
+1. Откройте файл в Sublime Text:
+
+```bash
+subl multiprocessing_examples/02_matrix_multiply.py
+```
+
+2. Найдите `TODO` (`Ctrl+F` → `TODO`), допишите код, сохраните (`Ctrl+S`).
+
+3. Переключитесь в терминал и запустите:
+
+```bash
+python3 multiprocessing_examples/02_matrix_multiply.py
+```
+
+4. Если есть ошибка — вернитесь в Sublime Text, исправьте, сохраните, запустите снова.
 
 ---
 
@@ -168,6 +343,7 @@ python3 multiprocessing_examples/01_basic_process.py
 2. **TODO 2**: Замерить время последовательного и параллельного вычисления, вывести результат.
 
 ```bash
+subl multiprocessing_examples/02_matrix_multiply.py
 python3 multiprocessing_examples/02_matrix_multiply.py
 ```
 
@@ -182,6 +358,7 @@ python3 multiprocessing_examples/02_matrix_multiply.py
 2. **TODO 4**: Запустить программу с разным числом процессов в пуле (1, 2, 4) и сравнить время.
 
 ```bash
+subl multiprocessing_examples/03_pool_matrix.py
 python3 multiprocessing_examples/03_pool_matrix.py
 ```
 
@@ -199,6 +376,7 @@ python3 multiprocessing_examples/03_pool_matrix.py
 1. **TODO 5**: Допишите асинхронную версию функции `main_async()` с использованием `asyncio.gather()`.
 
 ```bash
+subl asyncio_examples/01_sync_vs_async.py
 python3 asyncio_examples/01_sync_vs_async.py
 ```
 
@@ -212,6 +390,7 @@ python3 asyncio_examples/01_sync_vs_async.py
 1. **TODO 6**: Реализовать тело корутины `handle_echo` — прочитать данные, залогировать адрес клиента и сообщение, отправить данные обратно, закрыть соединение.
 
 ```bash
+subl asyncio_examples/02_echo_server.py
 python3 asyncio_examples/02_echo_server.py
 ```
 
@@ -228,6 +407,7 @@ python3 asyncio_examples/02_echo_server.py
 Запуск (в отдельном терминале, пока работает сервер):
 
 ```bash
+subl asyncio_examples/03_echo_client.py
 python3 asyncio_examples/03_echo_client.py
 ```
 
@@ -247,6 +427,7 @@ python3 asyncio_examples/03_echo_client.py
 1. **TODO 9**: Реализовать тело `handle_client` — принять данные, залогировать PID и сообщение, отправить обратно, закрыть соединение.
 
 ```bash
+subl multiprocessing_examples/04_mp_echo_server.py
 python3 multiprocessing_examples/04_mp_echo_server.py
 ```
 
@@ -285,7 +466,17 @@ python3 multiprocessing_examples/05_mp_echo_client.py
 
 ---
 
+## Проверьте свои знания
+
+После выполнения всех заданий пройдите тест из 20 вопросов по материалам лабораторной работы:
+
+**[Открыть тест (questions.html)](questions.html)**
+
+---
+
 ## Сдача работы: пошаговая инструкция Git и GitHub
+
+> Вы уже сделали **Fork** и **Clone** в разделе «Подготовка». Ваш форк — это ваш личный репозиторий, куда вы можете отправлять (push) свою работу.
 
 ### Шаг 1. Настройка Git (выполняется один раз)
 
@@ -296,28 +487,9 @@ git config --global user.name "Ваше Имя"
 git config --global user.email "your.email@example.com"
 ```
 
-Проверьте настройки:
+### Шаг 2. Настройка аутентификации
 
-```bash
-git config --list
-```
-
-### Шаг 2. Создание репозитория на GitHub
-
-1. Откройте [github.com](https://github.com) и войдите в свой аккаунт.
-2. Нажмите **"+"** в правом верхнем углу → **"New repository"**.
-3. Заполните:
-   - **Repository name**: `lab14_part2`
-   - **Visibility**: Public (или Private, если преподаватель разрешил)
-   - **НЕ ставьте** галочку "Add a README file" (README уже есть в вашем проекте)
-4. Нажмите **"Create repository"**.
-5. Скопируйте URL репозитория — он понадобится далее. Пример:
-   - HTTPS: `https://github.com/<ВАШ_ЛОГИН>/lab14_part2.git`
-   - SSH: `git@github.com:<ВАШ_ЛОГИН>/lab14_part2.git`
-
-### Шаг 3. Настройка аутентификации
-
-GitHub не принимает обычный пароль для push. Нужно настроить один из двух способов: **Personal Access Token** (проще) или **SSH-ключ** (удобнее для постоянной работы).
+GitHub не принимает обычный пароль для push. Настройте один из двух способов: **Personal Access Token** (проще) или **SSH-ключ** (удобнее для постоянной работы).
 
 ---
 
@@ -347,15 +519,6 @@ git config --global credential.helper 'cache --timeout=3600'
 При первом `git push` Git спросит логин и пароль. Вместо пароля вставьте токен. Он сохранится в памяти на 1 час (3600 секунд) и повторно запрашиваться не будет.
 
 > **Безопасность:** не используйте `credential.helper store` — он сохраняет токен в открытом виде в файле `~/.git-credentials`. Вариант `cache` хранит токен только в оперативной памяти и автоматически удаляет его после истечения таймаута.
-
-**A.3. Привяжите удалённый репозиторий (HTTPS):**
-
-```bash
-cd ~/lab14_part2
-git remote set-url origin https://github.com/<ВАШ_ЛОГИН>/lab14_part2.git
-```
-
-> Замените `<ВАШ_ЛОГИН>` на ваш реальный логин GitHub.
 
 ---
 
@@ -413,16 +576,18 @@ ssh -T git@github.com
 Hi <ВАШ_ЛОГИН>! You've successfully authenticated, but GitHub does not provide shell access.
 ```
 
-**B.6. Привяжите удалённый репозиторий (SSH):**
+**B.6. (Только для SSH) Смените remote URL на SSH:**
 
 ```bash
 cd ~/lab14_part2
 git remote set-url origin git@github.com:<ВАШ_ЛОГИН>/lab14_part2.git
 ```
 
+> Если вы используете **HTTPS + токен**, этот шаг не нужен — remote URL уже настроен при клонировании.
+
 ---
 
-### Шаг 4. Проверка текущего состояния
+### Шаг 3. Проверка текущего состояния
 
 Убедитесь, что все TODO выполнены и код запускается без ошибок. Заполните файл **`RESULTS.md`** — вставьте вывод каждой программы, заполните сравнительную таблицу и впишите ответы на вопросы. Затем проверьте, какие файлы были изменены:
 
@@ -445,7 +610,7 @@ Changes not staged for commit:
   modified:   asyncio_examples/03_echo_client.py
 ```
 
-### Шаг 5. Добавление файлов в индекс (staging)
+### Шаг 4. Добавление файлов в индекс (staging)
 
 Добавьте все изменённые файлы:
 
@@ -468,7 +633,7 @@ git status
 
 Теперь файлы должны быть в секции `Changes to be committed` (зелёным цветом).
 
-### Шаг 6. Создание коммита
+### Шаг 5. Создание коммита
 
 ```bash
 git commit -m "lab14 part2: выполнены TODO — multiprocessing и asyncio"
@@ -482,7 +647,7 @@ git commit -m "lab14 part2: выполнены TODO — multiprocessing и async
 git log --oneline -3
 ```
 
-### Шаг 7. Отправка на GitHub (push)
+### Шаг 6. Отправка на GitHub (push)
 
 **Если удалённый репозиторий уже содержит файлы** (например, предыдущие работы или файлы другого студента), сначала выполните слияние:
 
@@ -522,7 +687,7 @@ git push -u origin master
 - Для HTTPS: убедитесь, что ввели токен (не пароль) и у токена есть scope `repo`.
 - Для SSH: проверьте `ssh -T git@github.com` и убедитесь, что публичный ключ добавлен на GitHub.
 
-### Шаг 8. Проверка результата
+### Шаг 7. Проверка результата
 
 1. Откройте в браузере: `https://github.com/<ВАШ_ЛОГИН>/lab14_part2`
 2. Убедитесь, что все файлы загружены и содержат ваш код.

@@ -109,11 +109,12 @@ def parallel_multiply(A, B):
     # отдельный процесс, который вызовет element_to_queue(index, A, B, q).
     # Добавьте процесс в список processes и запустите его.
     #
-    # Подсказка: используйте два вложенных цикла по i и j.
-    # Создание процесса:
-    #   p = Process(target=element_to_queue, args=((i, j), A, B, q))
-    #   processes.append(p)
-    #   p.start()
+    # Подсказка:
+    #   for i in range(rows):
+    #       for j in range(cols):
+    #           p = Process(target=element_to_queue, args=((i, j), A, B, q))
+    #           processes.append(p)
+    #           p.start()
 
     # --- Ваш код здесь ---
 
@@ -155,7 +156,10 @@ if __name__ == '__main__':
     #   t2 = time.time()
     #   result_par = parallel_multiply(matrix_a, matrix_b)
     #   time_par = time.time() - t2
-    #   ... вывод результата и времени ...
+    #   print("Результат (параллельно):")
+    #   for row in result_par:
+    #       print(f"  {row}")
+    #   print(f"Время: {time_par:.6f} сек\n")
     #   print(f"Ускорение: {time_seq / time_par:.2f}x")
 
     # --- Ваш код здесь ---
